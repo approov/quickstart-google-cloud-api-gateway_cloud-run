@@ -1,0 +1,9 @@
+# @link https://cloud.google.com/run/docs/quickstarts/build-and-deploy/deploy-python-service#writing
+
+Dockerfile
+README.md
+*.pyc
+*.pyo
+*.pyd
+__pycache__
+.pytest_cache

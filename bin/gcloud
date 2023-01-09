@@ -1,0 +1,293 @@
+#!/bin/sh
+
+set -eu
+
+# @link https://cloud.google.com/sdk/docs/downloads-docker
+
+Create_OpenApi_Spec() {
+cat << EOF > "./openapi-spec.yaml"
+swagger: '2.0'
+info:
+  title: "${API_ID? Missing APP_ID ...}"
+  description: Sample API on API Gateway with a Cloud Run backend
+  version: 1.0.0
+schemes:
+  - https
+produces:
+  - application/json
+x-google-backend:
+  address: "${CLOUD_RUN_APP_URL? Missing CLOUD_RUN_APP_URL ...}"
+securityDefinitions:
+  approov-token-check:
+    authorizationUrl: ""
+    flow: "implicit"
+    type: "oauth2"
+    # The value below should be unique
+    x-google-issuer: "${APPROOV_TOKEN_ISSUER:-to-update-later}"
+    x-google-jwks_uri: "${APPROOV_JWKS_URI:-to-update-later}"
+    # Optional. Replace YOUR-CLIENT-ID with your client ID
+    x-google-audiences: "${API_GATEWAY_DOMAIN:-to-update-later}"
+    scopes:
+      read: "Grants read access"
+      write: "Grants write access"
+security:
+  - approov-token-check: []
+paths:
+  /:
+    get:
+      summary: Cloud Run hello world
+      operationId: hello
+      responses:
+        '200':
+          description: A successful response
+          schema:
+            type: object
+            properties:
+              message:
+                type: string
+                description: The hello world message.
+
+EOF
+}
+
+Run_Container() {
+  sudo docker run ${RUNNING_MODE} ${VOLUMES_FROM} \
+      ${BACKGROUND_MODE} \
+      --env-file "${ENV_FILE}" \
+      --name ${CONTAINER_NAME} \
+      --hostname ${CONTAINER_NAME} \
+      --volume ${PWD}:/workspace \
+      "${IMAGE_NAME}":"${TAG}" \
+      ${@}
+}
+
+Main() {
+
+  ##############################################################################
+  # DEFAULTS
+  ##############################################################################
+
+  local IMAGE_NAME=gcr.io/google.com/cloudsdktool/google-cloud-cli
+  local TAG=latest
+  local CONTAINER_USER=$(id -u)
+  local CONTAINER_NAME=gcloudcli
+  local COMMAND=help
+  local BUILD_PATH=$PWD
+  local DOCKERFILE_PATH=$PWD/Dockerfile
+  local RUNNING_MODE="--rm"
+  local BACKGROUND_MODE="-it"
+  local VOLUMES_FROM="--volumes-from gcloud-config"
+  local ENV_FILE=./.env
+  local API_ID="approov-hello"
+  local API_CONFIG_ID=hellowworld
+  local API_ID=hellowworld
+
+
+  if [ -f ./.env ]; then
+    . ./.env
+  elif [ -f ./../.env ]; then
+    . ./../.env
+    ENV_FILE=./../.env
+  elif [ -f ./../../.env ]; then
+    . ./../../.env
+    ENV_FILE=./../../.env
+  else
+    printf "\nERROR: Please copy the .env.example file to .env at the root of the project.\n\n"
+    exit 1
+  fi
+
+
+  ##############################################################################
+  # PARSE INPUT
+  ##############################################################################
+
+  for input in "${@}"; do
+    case "${input}" in
+
+      ## DOCKER STACK SPECIFIC
+
+      --docker-image-tag )
+        TAG="${2? Missing tag for the docker image!!!}"
+        shift 2
+      ;;
+
+      --docker-detached )
+        BACKGROUND_MODE="--detach"
+        shift 1
+      ;;
+
+      --docker-container-user )
+        CONTAINER_USER=${2? Missing user for container!!!}
+        shift 2
+      ;;
+
+      --docker-container-name )
+        CONTAINER_NAME=${2? Missing name for container!!!}
+        shift 2
+      ;;
+
+      docker-container-shell )
+        COMMAND=bash
+        shift 1
+        Run_Container "bash"
+        exit $?
+      ;;
+
+      docker-container-exec )
+        COMMAND=bash
+        shift 1
+
+        sudo docker exec \
+            ${BACKGROUND_MODE} \
+            --user ${CONTAINER_USER} \
+            "${CONTAINER_NAME}" \
+            "${COMMAND}"
+
+        exit $?
+      ;;
+
+      docker-build-gcloud-cli )
+        Run_Container "gcloud version"
+        exit $?
+      ;;
+
+
+      ## QUICKSTART HELPERS
+
+
+      quickstart-enable-services )
+        Run_Container "gcloud services enable apigateway.googleapis.com"
+        Run_Container "gcloud services enable servicemanagement.googleapis.com"
+        Run_Container "gcloud services enable servicecontrol.googleapis.com"
+        Run_Container "gcloud services enable artifactregistry.googleapis.com"
+        Run_Container "gcloud services enable containerregistry.googleapis.com"
+        Run_Container "gcloud services enable cloudbuild.googleapis.com"
+        Run_Container "gcloud services enable sourcerepo.googleapis.com"
+        Run_Container "gcloud services enable compute.googleapis.com"
+
+        exit $?
+      ;;
+
+      quickstart-cloudrun-deploy )
+        Run_Container "gcloud run deploy ${API_ID} \
+          --source /workspace \
+          --region ${GCP_REGION} \
+          --allow-unauthenticated"
+        exit $?
+      ;;
+
+      quickstart-create-openapi-spec-file )
+        Create_OpenApi_Spec
+        exit $?
+      ;;
+
+      quickstart-api-config-create )
+        Run_Container "gcloud api-gateway api-configs create ${API_CONFIG_ID} \
+          --api=${API_ID} --openapi-spec=/workspace/openapi-spec.yaml"
+
+        exit $?
+      ;;
+
+      quickstart-api-config-describe )
+        Run_Container "gcloud api-gateway api-configs describe ${API_CONFIG_ID} \
+          --api=${API_ID}"
+
+        exit $?
+      ;;
+
+      quickstart-api-config-list )
+        Run_Container "gcloud api-gateway api-configs list"
+
+        exit $?
+      ;;
+
+      quickstart-api-gateway-create )
+        Run_Container "gcloud api-gateway gateways create ${API_GATEWAY_ID} \
+          --api=${API_ID} --api-config=${API_CONFIG_ID} --location=${GCP_REGION}"
+
+        exit $?
+      ;;
+
+      quickstart-api-gateway-update )
+        Run_Container "gcloud api-gateway gateways update ${API_GATEWAY_ID} \
+          --api=${API_ID} --api-config=${API_CONFIG_ID} --location=${GCP_REGION}"
+
+        exit $?
+      ;;
+
+      quickstart-api-gateway-describe )
+        Run_Container "gcloud api-gateway gateways describe ${API_GATEWAY_ID} \
+          --location=${GCP_REGION}"
+
+        exit $?
+      ;;
+
+      quickstart-api-gateway-apis-list )
+        Run_Container "gcloud api-gateway apis list"
+
+        exit $?
+      ;;
+
+      quickstart-api-gateway-list )
+        Run_Container "gcloud api-gateway gateways list"
+
+        exit $?
+      ;;
+
+
+      ### Cleanup
+
+      # @link https://cloud.google.com/api-gateway/docs/creating-api#deleting-an-api'
+      quickstart-api-config-delete )
+        Run_Container "gcloud api-gateway api-configs delete ${2? Missing API Config ID to delete...} \
+          --api=${API_ID}"
+
+        exit $?
+      ;;
+
+      # @link https://cloud.google.com/api-gateway/docs/creating-api#deleting-an-api'
+      quickstart-api-gateway-apis-delete )
+        Run_Container "gcloud api-gateway apis delete ${API_ID}"
+
+        exit $?
+      ;;
+
+
+      # @link https://cloud.google.com/api-gateway/docs/deploying-api#deleting_a_gateway
+      quickstart-api-gateway-delete )
+        Run_Container "gcloud api-gateway gateways delete ${2? Missing the API_GATEWAY_ID to delete...} \
+          --location=${GCP_REGION}"
+
+        exit $?
+      ;;
+
+      ## GCLOUD CLI SHORTCUTS
+
+      auth )
+        case "${2:-}" in
+          login )
+            VOLUMES_FROM=
+            RUNNING_MODE=
+            CONTAINER_NAME=gcloud-config
+            Run_Container "gcloud auth login"
+            exit $?
+          ;;
+        esac
+
+        sudo docker start gcloud-config
+        sudo docker exec -it gcloud-config "bash"
+        exit $?
+      ;;
+
+    esac
+  done
+
+
+  ##############################################################################
+  # EXECUTION
+  ##############################################################################
+
+    Run_Container "gcloud ${@:-version}"
+}
+
+Main "${@}"
